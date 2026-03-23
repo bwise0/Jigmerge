@@ -76,22 +76,30 @@
 
   .pgroup{position:absolute;z-index:10;pointer-events:none;touch-action:none;background:transparent;}
   .pgroup.dragging{z-index:500;}
-  .pgroup.dragging .piece{opacity:0.9;filter:drop-shadow(0 6px 20px rgba(0,0,0,.7));}
 
   .piece{position:absolute;overflow:hidden;pointer-events:auto;touch-action:none;cursor:grab;}
   .piece img{display:block;width:100%;height:100%;}
 
-  /* ── 완성 오버레이 ── */
+  /* ── 완성 바 (상단 센터 가로형) ── */
   #win-overlay{
-    display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);
-    align-items:center;justify-content:center;z-index:1000;flex-direction:column;gap:20px;
+    display:none;position:fixed;
+    top:16px;
+    left:16px;right:16px;       /* 좌우 16px 여백으로 화면 넘침 방지 */
+    background:rgba(14,14,18,0.85);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border:1px solid rgba(240,192,64,.45);
+    border-radius:40px;padding:10px 16px;
+    align-items:center;justify-content:space-between;
+    z-index:1000;flex-direction:row;gap:10px;
+    box-shadow:0 4px 20px rgba(0,0,0,.35);
+    overflow:hidden;
   }
   #win-overlay.show{display:flex;}
-  #win-overlay h2{font-family:'Bebas Neue';font-size:56px;color:var(--accent);letter-spacing:2px;}
-  #win-overlay p{font-size:16px;color:var(--text);opacity:.8;}
+  #win-overlay h2{font-family:'Bebas Neue';font-size:22px;color:var(--accent);letter-spacing:1px;line-height:1;margin:0;flex-shrink:0;}
+  #win-overlay p{font-size:11px;color:var(--muted);line-height:1.3;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   #win-overlay button{
-    background:var(--accent);border:none;border-radius:var(--radius);color:#111;
-    font-family:'Bebas Neue';font-size:24px;padding:14px 40px;cursor:pointer;
+    background:var(--accent);border:none;border-radius:20px;color:#111;
+    font-family:'Bebas Neue';font-size:15px;padding:6px 14px;cursor:pointer;flex-shrink:0;
   }
 
   #loading{
@@ -147,13 +155,13 @@
     </div>
     <button class="btn-shuffle" onclick="initBoard()" title="재배치">🔀</button>
   </div>
-  <div id="puzzle-area"><div id="grid-root"></div></div>
+  <div id="puzzle-area"><div id="grid-root"></div><img id="win-img" style="display:none;max-width:100%;max-height:100%;border-radius:6px;touch-action:manipulation;" alt="완성된 퍼즐 — 길게 눌러서 저장"></div>
 </div>
 
 <!-- ── 완성 오버레이 ── -->
 <div id="win-overlay">
   <h2>🎉 완성!</h2>
-  <p id="win-stats"></p>
+  <p id="win-stats"></p><p id="win-hint" style="font-size:11px;color:var(--muted);display:none;">📥 그림을 길게 눌러 저장</p>
   <button onclick="goSetup()">처음으로</button>
 </div>
 
@@ -199,16 +207,15 @@ function showLoading(on) {
 /* ── 이미지 ── */
 function fetchRandom() {
   showLoading(true);
-  // picsum.photos 직접 호출 (CORS 지원, iOS Safari 호환)
+  // 2배 해상도로 요청 (1200×1600) — Retina/고해상도 디스플레이 대응
   const id = Math.floor(Math.random() * 1000);
-  const url = `https://picsum.photos/seed/${id}/600/800`;
+  const url = `https://picsum.photos/seed/${id}/1200/1600`;
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
-    // Canvas에 그려서 data URL로 저장 (이후 재로드 없이 슬라이싱)
     const cv = document.createElement('canvas');
-    cv.width = 600; cv.height = 800;
-    cv.getContext('2d').drawImage(img, 0, 0, 600, 800);
+    cv.width = 1200; cv.height = 1600;
+    cv.getContext('2d').drawImage(img, 0, 0, 1200, 1600);
     imgSrc = cv.toDataURL('image/jpeg', 0.95);
     document.getElementById('btn-start').disabled = false;
     showLoading(false);
@@ -231,6 +238,8 @@ function startGame() {
   TILE_H = STEP_H;
 
   // imgSrc는 이미 canvas data URL — Image로 로드 후 슬라이싱
+  // 타일 canvas를 2배 해상도로 생성 (CSS 크기는 TILE_W/H 유지)
+  const DPR = 2;
   const img = new Image();
   img.onload = () => {
     tiles = [];
@@ -238,8 +247,13 @@ function startGame() {
     for (let r = 0; r < N; r++) {
       for (let c = 0; c < N; c++) {
         const tc = document.createElement('canvas');
-        tc.width = TILE_W; tc.height = TILE_H;
-        tc.getContext('2d').drawImage(img, c * srcW, r * srcH, srcW, srcH, 0, 0, TILE_W, TILE_H);
+        tc.width  = TILE_W * DPR;   // 2배 픽셀
+        tc.height = TILE_H * DPR;
+        tc.getContext('2d').drawImage(
+          img,
+          c * srcW, r * srcH, srcW, srcH,   // 원본 좌표 (이미 2배 이미지)
+          0, 0, TILE_W * DPR, TILE_H * DPR   // 2배 캔버스에 그림
+        );
         tiles.push(tc.toDataURL('image/jpeg', 0.92));
       }
     }
@@ -259,12 +273,20 @@ function goSetup() {
   document.getElementById('screen-game').classList.remove('active');
   document.getElementById('screen-setup').classList.add('active');
   document.getElementById('win-overlay').classList.remove('show');
+  // 상태 초기화
+  document.getElementById('win-img').style.display = 'none';
+  document.getElementById('win-hint').style.display = 'none';
+  document.getElementById('grid-root').style.display = '';
 }
 
 /* ── 보드 초기화 ── */
 function initBoard() {
   moves = 0; groups.clear(); pieceGroup = {}; nextGid = 0;
   document.getElementById('stat-moves').textContent = 0;
+  document.getElementById('win-overlay').classList.remove('show');
+  document.getElementById('win-img').style.display = 'none';
+  document.getElementById('win-hint').style.display = 'none';
+  document.getElementById('grid-root').style.display = '';
   startTimer();
 
   const root = document.getElementById('grid-root');
@@ -283,6 +305,8 @@ function initBoard() {
       pieceGroup[pid] = gid;
     }
   }
+  // 시작 시 이미 올바르게 인접한 조각은 즉시 병합
+  runMergePass();
   renderAll();
 }
 
@@ -321,36 +345,17 @@ function renderAll() {
 
     g.members.forEach(m => {
       // 인접 멤버 여부 (상하좌우)
+      // 규칙: 같은 그룹 멤버가 있는 방향 → crop 0 (내부면)
+      //       멤버 없는 방향 → crop CROP (외부 노출면)
       const hasT = mbrSet.has(g.gid + ',' + (m.r-1) + ',' + m.c);
       const hasB = mbrSet.has(g.gid + ',' + (m.r+1) + ',' + m.c);
       const hasL = mbrSet.has(g.gid + ',' + m.r + ',' + (m.c-1));
       const hasR = mbrSet.has(g.gid + ',' + m.r + ',' + (m.c+1));
 
-      // crop 적용 기준:
-      // 이웃 방향이 비었더라도, 그 빈 셀의 수직 이웃 중에
-      // 같은 그룹 멤버가 있으면 "내부 코너" → crop 안 함
-      //
-      // 예: D(col3,row1) 아래 셀(col3,row2)이 비었지만
-      //     (col3,row2)의 왼쪽(col2,row2)=E가 같은 그룹
-      //     → 내부 코너 → cB=0
-      const emptyT_isInner = !hasT &&
-        (mbrSet.has(g.gid+','+(m.r-1)+','+(m.c-1)) ||
-         mbrSet.has(g.gid+','+(m.r-1)+','+(m.c+1)));
-      const emptyB_isInner = !hasB &&
-        (mbrSet.has(g.gid+','+(m.r+1)+','+(m.c-1)) ||
-         mbrSet.has(g.gid+','+(m.r+1)+','+(m.c+1)));
-      const emptyL_isInner = !hasL &&
-        (mbrSet.has(g.gid+','+(m.r-1)+','+(m.c-1)) ||
-         mbrSet.has(g.gid+','+(m.r+1)+','+(m.c-1)));
-      const emptyR_isInner = !hasR &&
-        (mbrSet.has(g.gid+','+(m.r-1)+','+(m.c+1)) ||
-         mbrSet.has(g.gid+','+(m.r+1)+','+(m.c+1)));
-
-      // 각 방향 crop 양: 외부 노출면만 CROP, 내부 코너는 0
-      const cT = (hasT || emptyT_isInner) ? 0 : CROP;
-      const cB = (hasB || emptyB_isInner) ? 0 : CROP;
-      const cL = (hasL || emptyL_isInner) ? 0 : CROP;
-      const cR = (hasR || emptyR_isInner) ? 0 : CROP;
+      const cT = hasT ? 0 : CROP;
+      const cB = hasB ? 0 : CROP;
+      const cL = hasL ? 0 : CROP;
+      const cR = hasR ? 0 : CROP;
 
       // piece 크기 = TILE - crop (crop된 만큼 작아짐 → 갭 생성)
       const pw = TILE_W - cL - cR;
@@ -364,18 +369,15 @@ function renderAll() {
       piece.style.left   = ((m.c - minC) * STEP_W + cL) + 'px';
       piece.style.top    = ((m.r - minR) * STEP_H + cT) + 'px';
 
-      const img = document.createElement('img');
-      img.src = tiles[m.pid];
-      // img는 원본 TILE 크기로 설정
-      // object-fit:none + object-position으로 (cL, cT) 위치부터 표시
-      // → piece 크기(pw×ph)가 뷰포트이므로 자동 클리핑
-      img.style.width          = TILE_W + 'px';
-      img.style.height         = TILE_H + 'px';
-      img.style.objectFit      = 'none';
-      img.style.objectPosition = (-cL) + 'px ' + (-cT) + 'px';
-      img.style.display        = 'block';
+      // background-image 방식:
+      // background-size = TILE_W × TILE_H (CSS 1배 크기로 2배 픽셀 표시 → 선명)
+      // background-position = (-cL, -cT) → crop 위치 정확
+      // piece div overflow:hidden이 pw×ph로 클리핑
+      piece.style.backgroundImage    = `url(${tiles[m.pid]})`;
+      piece.style.backgroundSize     = TILE_W + 'px ' + TILE_H + 'px';
+      piece.style.backgroundPosition = (-cL) + 'px ' + (-cT) + 'px';
+      piece.style.backgroundRepeat   = 'no-repeat';
 
-      piece.appendChild(img);
       piece.addEventListener('pointerdown', onDown);
       el.appendChild(piece);
     });
@@ -561,6 +563,15 @@ function checkWin() {
   clearInterval(timerInterval);
   const t = document.getElementById('stat-timer').textContent;
   document.getElementById('win-stats').textContent = `이동 ${moves}회 · 시간 ${t}`;
+
+  // 완성 퍼즐 이미지 표시: grid-root 숨기고 원본 이미지로 교체
+  // → 롱프레스로 저장 가능
+  const winImg = document.getElementById('win-img');
+  winImg.src = imgSrc;  // fetchRandom에서 저장한 고해상도 data URL
+  winImg.style.display = 'block';
+  document.getElementById('grid-root').style.display = 'none';
+  document.getElementById('win-hint').style.display = 'block';
+
   setTimeout(() => document.getElementById('win-overlay').classList.add('show'), 200);
 }
 
