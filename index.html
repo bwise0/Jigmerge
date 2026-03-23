@@ -34,6 +34,19 @@
   .diff-btn:hover{border-color:var(--accent);color:var(--text);}
   .diff-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(240,192,64,.1);}
 
+  .crop-row{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:28px;}
+  .crop-label{font-size:12px;color:var(--muted);letter-spacing:.08em;}
+  .crop-val{
+    width:48px;text-align:center;background:var(--surface2);border:1px solid var(--border);
+    color:var(--text);border-radius:8px;padding:7px 4px;font-size:15px;
+  }
+  .crop-btn{
+    width:34px;height:34px;border-radius:50%;background:var(--surface2);
+    border:1px solid var(--border);color:var(--text);font-size:18px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:background .15s;
+    flex-shrink:0;
+  }
+  .crop-btn:hover{background:var(--border);}
   .btn-row{display:flex;flex-direction:column;gap:12px;margin-top:8px;}
   .btn{background:var(--accent);border:none;border-radius:var(--radius);color:#111;
        font-family:'Bebas Neue';font-size:28px;padding:18px;width:100%;cursor:pointer;transition:opacity .2s;}
@@ -61,10 +74,11 @@
   }
   #grid-root{position:relative;flex-shrink:0;}
 
-  .pgroup{position:absolute;overflow:hidden;z-index:10;pointer-events:none;touch-action:none;}
-  .pgroup.dragging{z-index:500;opacity:0.9;filter:drop-shadow(0 8px 24px rgba(0,0,0,.8));}
+  .pgroup{position:absolute;z-index:10;pointer-events:none;touch-action:none;background:transparent;}
+  .pgroup.dragging{z-index:500;}
+  .pgroup.dragging .piece{opacity:0.9;filter:drop-shadow(0 6px 20px rgba(0,0,0,.7));}
 
-  .piece{position:absolute;pointer-events:auto;touch-action:none;cursor:grab;}
+  .piece{position:absolute;overflow:hidden;pointer-events:auto;touch-action:none;cursor:grab;}
   .piece img{display:block;width:100%;height:100%;}
 
   /* ── 완성 오버레이 ── */
@@ -107,6 +121,14 @@
       <button class="diff-btn" data-n="7" onclick="setN(this)">7×7<span>49조각</span></button>
     </div>
 
+    <div class="section-label" style="margin-top:0;">경계 크롭 (px)</div>
+    <div class="crop-row">
+      <button class="crop-btn" onclick="adjCrop(-1)">−</button>
+      <input class="crop-val" id="crop-input" type="number" value="2" min="0" max="20" oninput="clampCrop()">
+      <button class="crop-btn" onclick="adjCrop(1)">+</button>
+      <span class="crop-label" style="margin-left:4px;">단독/그룹 외곽 각 방향</span>
+    </div>
+
     <div class="btn-row">
       <button class="btn" onclick="fetchRandom()">🎲 랜덤 이미지</button>
       <button class="btn" id="btn-start" onclick="startGame()" disabled>퍼즐 시작 →</button>
@@ -147,6 +169,7 @@
    pieceGroup[pid] = gid
 ══════════════════════════════════════════ */
 const GAP = 0;
+let CROP = 2;   // 외곽 각 방향 crop px (단독: 4면, 그룹: 외곽면만)
 
 let N = 4;
 let STEP_W, STEP_H, TILE_W, TILE_H;
@@ -159,6 +182,14 @@ function setN(btn) {
   document.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   N = parseInt(btn.dataset.n);
+}
+function adjCrop(d) {
+  const inp = document.getElementById('crop-input');
+  inp.value = Math.max(0, Math.min(20, parseInt(inp.value || '2') + d));
+}
+function clampCrop() {
+  const inp = document.getElementById('crop-input');
+  inp.value = Math.max(0, Math.min(20, parseInt(inp.value || '2')));
 }
 
 function showLoading(on) {
@@ -191,6 +222,7 @@ function fetchRandom() {
 
 /* ── 게임 시작 ── */
 function startGame() {
+  CROP = Math.max(0, Math.min(20, parseInt(document.getElementById('crop-input').value || '2')));
   showLoading(true);
   const availW = Math.min(window.innerWidth - 32, 520);
   STEP_W = Math.floor(availW / N);
@@ -215,7 +247,7 @@ function startGame() {
     document.getElementById('screen-setup').classList.remove('active');
     document.getElementById('screen-game').classList.add('active');
     document.getElementById('win-overlay').classList.remove('show');
-    document.getElementById('stat-badge').textContent = `${N}×${N}`;
+    document.getElementById('stat-badge').textContent = `${N}×${N} · c${CROP}`;
     initBoard();
   };
   img.onerror = () => { showLoading(false); alert('오류가 발생했습니다.'); };
@@ -256,15 +288,22 @@ function initBoard() {
 
 /* ══════════════════════════════════════════
    렌더링
-   GAP = 0 이므로 STEP = TILE
-   컨테이너 위치: minC * STEP_W, minR * STEP_H
-   컨테이너 크기: (maxC-minC)*STEP_W + TILE_W, (maxR-minR)*STEP_H + TILE_H
-   피스 상대위치: (m.c-minC)*STEP_W, (m.r-minR)*STEP_H
-   → GAP=0이므로 피스들이 빈틈 없이 붙음
+   CROP: 외곽 각 방향 잘라낼 픽셀 수
+   - 단독: 4면 모두 CROP
+   - 그룹: 인접 멤버 없는 방향만 CROP
+
+   구현: piece div 크기를 crop만큼 줄이고
+   img를 object-fit:none + object-position으로
+   원본 이미지의 해당 영역만 표시
+   → pgroup overflow와 무관하게 정확히 동작
 ══════════════════════════════════════════ */
 function renderAll() {
   const root = document.getElementById('grid-root');
   root.innerHTML = '';
+
+  // 그룹별 멤버 위치 조회 Set
+  const mbrSet = new Set();
+  groups.forEach(g => g.members.forEach(m => mbrSet.add(g.gid + ',' + m.r + ',' + m.c)));
 
   groups.forEach(g => {
     const minR = Math.min(...g.members.map(m => m.r));
@@ -281,15 +320,61 @@ function renderAll() {
     el.style.height = ((maxR - minR) * STEP_H + TILE_H) + 'px';
 
     g.members.forEach(m => {
+      // 인접 멤버 여부 (상하좌우)
+      const hasT = mbrSet.has(g.gid + ',' + (m.r-1) + ',' + m.c);
+      const hasB = mbrSet.has(g.gid + ',' + (m.r+1) + ',' + m.c);
+      const hasL = mbrSet.has(g.gid + ',' + m.r + ',' + (m.c-1));
+      const hasR = mbrSet.has(g.gid + ',' + m.r + ',' + (m.c+1));
+
+      // crop 적용 기준:
+      // 이웃 방향이 비었더라도, 그 빈 셀의 수직 이웃 중에
+      // 같은 그룹 멤버가 있으면 "내부 코너" → crop 안 함
+      //
+      // 예: D(col3,row1) 아래 셀(col3,row2)이 비었지만
+      //     (col3,row2)의 왼쪽(col2,row2)=E가 같은 그룹
+      //     → 내부 코너 → cB=0
+      const emptyT_isInner = !hasT &&
+        (mbrSet.has(g.gid+','+(m.r-1)+','+(m.c-1)) ||
+         mbrSet.has(g.gid+','+(m.r-1)+','+(m.c+1)));
+      const emptyB_isInner = !hasB &&
+        (mbrSet.has(g.gid+','+(m.r+1)+','+(m.c-1)) ||
+         mbrSet.has(g.gid+','+(m.r+1)+','+(m.c+1)));
+      const emptyL_isInner = !hasL &&
+        (mbrSet.has(g.gid+','+(m.r-1)+','+(m.c-1)) ||
+         mbrSet.has(g.gid+','+(m.r+1)+','+(m.c-1)));
+      const emptyR_isInner = !hasR &&
+        (mbrSet.has(g.gid+','+(m.r-1)+','+(m.c+1)) ||
+         mbrSet.has(g.gid+','+(m.r+1)+','+(m.c+1)));
+
+      // 각 방향 crop 양: 외부 노출면만 CROP, 내부 코너는 0
+      const cT = (hasT || emptyT_isInner) ? 0 : CROP;
+      const cB = (hasB || emptyB_isInner) ? 0 : CROP;
+      const cL = (hasL || emptyL_isInner) ? 0 : CROP;
+      const cR = (hasR || emptyR_isInner) ? 0 : CROP;
+
+      // piece 크기 = TILE - crop (crop된 만큼 작아짐 → 갭 생성)
+      const pw = TILE_W - cL - cR;
+      const ph = TILE_H - cT - cB;
+
       const piece = document.createElement('div');
       piece.className = 'piece';
-      piece.style.width  = TILE_W + 'px';
-      piece.style.height = TILE_H + 'px';
-      piece.style.left   = ((m.c - minC) * STEP_W) + 'px';
-      piece.style.top    = ((m.r - minR) * STEP_H) + 'px';
+      piece.style.width  = pw + 'px';
+      piece.style.height = ph + 'px';
+      // piece 위치: 원래 위치에서 crop(cL, cT)만큼 안쪽으로
+      piece.style.left   = ((m.c - minC) * STEP_W + cL) + 'px';
+      piece.style.top    = ((m.r - minR) * STEP_H + cT) + 'px';
 
       const img = document.createElement('img');
       img.src = tiles[m.pid];
+      // img는 원본 TILE 크기로 설정
+      // object-fit:none + object-position으로 (cL, cT) 위치부터 표시
+      // → piece 크기(pw×ph)가 뷰포트이므로 자동 클리핑
+      img.style.width          = TILE_W + 'px';
+      img.style.height         = TILE_H + 'px';
+      img.style.objectFit      = 'none';
+      img.style.objectPosition = (-cL) + 'px ' + (-cT) + 'px';
+      img.style.display        = 'block';
+
       piece.appendChild(img);
       piece.addEventListener('pointerdown', onDown);
       el.appendChild(piece);
